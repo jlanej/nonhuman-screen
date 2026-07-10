@@ -1,18 +1,36 @@
-# Build and publish nonhuman-screen to PyPI on a version tag (e.g. v0.1.0).
+# Build and publish nonhuman-screen to PyPI.
 #
-# Uses PyPI Trusted Publishing (OIDC) — configure the publisher once for this
-# repository at https://pypi.org/manage/account/publishing/ (no API token
-# needed). The publisher must reference workflow `release.yml` and environment
-# `pypi`. Remember to bump `version` in pyproject.toml (and __init__.__version__)
-# to match the tag before tagging.
-name: Release
+# Two modes:
+#   * push to main  -> publishes a "continuous" release with an auto-incremented
+#                      version  <major>.<minor>.<run_number>  (base taken from
+#                      pyproject.toml), so consumers always get the latest build
+#                      without manual tagging.
+#   * push a v* tag -> publishes exactly that version (a deliberate release).
+#
+# Uses PyPI Trusted Publishing (OIDC) — no API token. The PyPI publisher MUST be
+# configured for THIS workflow file (`release.yml`) and environment `pypi`
+# (https://pypi.org/manage/account/publishing/). `skip-existing` prevents a hard
+# failure if a version was already uploaded (e.g. a workflow re-run).
+#
+# NOTE: publishing on every push to main creates one PyPI release per commit.
+# That is intentional here for active development; switch the `push.branches`
+# trigger off (leaving only tags) once you want deliberate, semver-only releases.
+# To move to a new minor/major, bump `version` in pyproject.toml on main.
+name: Publish to PyPI
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+
+# Avoid overlapping publishes racing for the same version.
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
 
 jobs:
-  build-and-publish:
+  publish:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -22,9 +40,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            BASE=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+            MAJMIN=$(echo "$BASE" | cut -d. -f1,2)
+            V="${MAJMIN}.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Publishing nonhuman-screen $V"
+
+      - name: Stamp version into the build (not committed)
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          python - "$V" <<'PY'
+          import pathlib, re, sys
+          v = sys.argv[1]
+          pp = pathlib.Path("pyproject.toml")
+          pp.write_text(re.sub(r'(?m)^version = ".*"', f'version = "{v}"', pp.read_text()))
+          ip = pathlib.Path("src/nonhuman_screen/__init__.py")
+          ip.write_text(re.sub(r'__version__ = ".*"', f'__version__ = "{v}"', ip.read_text()))
+          PY
+
       - name: Build sdist and wheel
         run: |
           pip install build
           python -m build
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
