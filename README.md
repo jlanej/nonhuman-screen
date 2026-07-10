@@ -1,5 +1,10 @@
 # nonhuman-screen
 
+[![PyPI](https://img.shields.io/pypi/v/nonhuman-screen.svg)](https://pypi.org/project/nonhuman-screen/)
+[![Python versions](https://img.shields.io/pypi/pyversions/nonhuman-screen.svg)](https://pypi.org/project/nonhuman-screen/)
+[![CI](https://github.com/jlanej/nonhuman-screen/actions/workflows/ci.yml/badge.svg)](https://github.com/jlanej/nonhuman-screen/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/jlanej/nonhuman-screen/blob/main/LICENSE)
+
 Classify sequencing reads by **non-human taxonomic content** using
 [kraken2](https://github.com/DerrickWood/kraken2), and reduce the per-read
 verdicts to a **non-human fraction (NHF)** plus per-domain breakdowns
@@ -139,6 +144,27 @@ docker run --rm -v "$PWD:/data" nonhuman-screen \
 
 The image entrypoint is `nonhuman-screen`; mount your BAM and kraken2 database in.
 You still supply the kraken2 database yourself (see [docs/database.md](docs/database.md)).
+
+## Releasing
+
+Releases are published to [PyPI](https://pypi.org/project/nonhuman-screen/)
+automatically by GitHub Actions using
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC — no API
+tokens), via [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+- **Continuous builds** — every push to `main` publishes
+  `<major>.<minor>.<run-number>` (the `<major>.<minor>` base is read from
+  `pyproject.toml`), so the latest code is always installable from PyPI.
+- **Tagged releases** — pushing a `vX.Y.Z` tag publishes exactly that version:
+  ```bash
+  git tag v0.2.0
+  git push origin v0.2.0
+  ```
+- **Bumping the minor/major** — edit `version` in `pyproject.toml` on `main`;
+  continuous builds then track the new base.
+
+To switch to deliberate, semver-only releases, remove `main` from the workflow's
+`push.branches` trigger (leaving only tags).
 
 ## License
 
