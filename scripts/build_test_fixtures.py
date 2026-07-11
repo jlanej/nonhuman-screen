@@ -20,6 +20,9 @@ These are committed so CI only needs the ``kraken2`` binary (not
 
 Requires: kraken2-build, samtools, pysam, and (for the first run) the GIAB BAMs.
 The database is built with kraken2 2.17.1 to match the pinned CI version.
+
+The rationale for these positive/negative controls, and exactly how each
+fixture is constructed, is documented in ``docs/testing.md``.
 """
 
 from __future__ import annotations

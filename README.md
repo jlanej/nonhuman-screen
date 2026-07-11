@@ -145,6 +145,20 @@ docker run --rm -v "$PWD:/data" nonhuman-screen \
 The image entrypoint is `nonhuman-screen`; mount your BAM and kraken2 database in.
 You still supply the kraken2 database yourself (see [docs/database.md](docs/database.md)).
 
+## Testing
+
+```bash
+pip install -e '.[bam,dev]'
+pytest
+```
+
+Unit tests need nothing extra. The integration and functional tests additionally
+need the `kraken2` binary and self-skip without it. The **functional tests** run
+the CLI end-to-end against committed positive/negative *Streptococcus* controls
+(a strep-injected BAM vs. clean human BAMs) — their rationale, how the fixtures
+are built, and what they assert are documented in
+[docs/testing.md](docs/testing.md).
+
 ## Releasing
 
 Releases are published to [PyPI](https://pypi.org/project/nonhuman-screen/)
