@@ -42,7 +42,7 @@ jobs:
         run: pip install -e '.[bam,dev]'
       - name: Integration tests (builds a tiny kraken2 DB)
         run: pytest tests/test_integration.py -v
-      - name: Functional CLI tests (committed fixtures: strep pos/neg controls)
+      - name: Functional CLI tests (strep positive/negative controls)
         run: pytest tests/test_functional_cli.py -v
 
   build:
