@@ -31,10 +31,10 @@ Options:
 Examples:
   ./scripts/download_kraken2_db.sh --db /data/kraken2/prackendb
 
-  docker run --rm \\
+  docker run --rm --entrypoint bash \\
     -v "\$PWD:/work" \\
-    ghcr.io/jlanej/kmer_denovo_filter:latest \\
-    bash /work/scripts/download_kraken2_db.sh --db /work/kraken2_db
+    nonhuman-screen \\
+    /work/scripts/download_kraken2_db.sh --db /work/kraken2_db
 EOF
 }
 
@@ -152,3 +152,5 @@ if [[ ! -f "$DB_VALIDATE_PATH/taxonomy/names.dmp" && ! -f "$DB_VALIDATE_PATH/nam
 fi
 
 echo "[kraken2-db] Complete."
+echo "[kraken2-db] Database directory (pass this to --kraken2-db):"
+echo "[kraken2-db]   $DB_VALIDATE_PATH"

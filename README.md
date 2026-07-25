@@ -45,8 +45,15 @@ outside UniVec-Core. Two conservative guards reduce false positives: a
 **human-homology guard** (any k-mer voting for human, taxid 9606, drops the read
 from every non-human numerator — important for integrating viruses such as
 HBV/HPV/ERVs) and **UniVec-Core exclusion** (synthetic vector/adapter sequences,
-taxid 81077, are tracked separately and never counted as contamination). See
+taxid 81077, are tracked separately and never counted as contamination). Both
+mechanisms are defined relative to human, so **the kraken2 database must contain
+the human genome** — PrackenDB does. See
 [docs/methodology.md](docs/methodology.md).
+
+A failed kraken2 run raises `Kraken2Error` (CLI: exit 3) instead of returning
+`nonhuman_fraction = 0.0`: for a contamination screen, a broken run that looks
+clean is the one result you can't afford. See
+[methodology.md §7](docs/methodology.md).
 
 ## Install
 
@@ -119,7 +126,8 @@ VCF and handles the conversion for you.
 | Symbol | Needs `[bam]` | Purpose |
 |---|:---:|---|
 | `Kraken2Runner.classify_sequences(seqs)` | no | Classify `{name: seq}` → `ClassificationResult` |
-| `ClassificationResult` | no | Per-domain read-name sets, counts, `fractions()`, `nonhuman_fraction`, `taxonomy_available` |
+| `ClassificationResult` | no | Per-domain read-name sets, counts, `fractions()`, `nonhuman_fraction`, `taxonomy_available`, `classification_failed` |
+| `Kraken2Error` | no | Raised when a kraken2 run did not produce a trustworthy tally (opt out with `strict=False`) |
 | `TaxonomicFractions` | no | Per-domain fractions; `from_result` / `over_reads` |
 | `read_supports_alt(read, variant_pos, ref, alt)` | no | Does an aligned read carry the ALT allele? |
 | `parse_kmer_votes(kmer_string)` | no | Parse kraken2 per-read k-mer detail into taxid votes |
@@ -154,9 +162,10 @@ pytest
 
 Unit tests need nothing extra. The integration and functional tests additionally
 need the `kraken2` binary and self-skip without it. The **functional tests** run
-the CLI end-to-end against committed positive/negative *Streptococcus* controls
-(a strep-injected BAM vs. clean human BAMs) — their rationale, how the fixtures
-are built, and what they assert are documented in
+the CLI end-to-end against committed *Streptococcus* controls — a strep-injected
+BAM (positive), clean human BAMs (negative), and a broken database (which must
+exit 3, not report 0.0). Their rationale, how the fixtures are built, what they
+assert, and **what they do not establish** are documented in
 [docs/testing.md](docs/testing.md).
 
 ## Releasing

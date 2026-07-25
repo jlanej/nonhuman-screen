@@ -35,6 +35,32 @@ descendant sets are computed for each domain from its NCBI root taxid:
 A read is **non-human** iff it is classified **and** its taxid is *not* on the
 human→root lineage, *not* in the human clade, and *not* under UniVec-Core.
 
+**This test is negative, so its meaning depends on the database.** Anything
+classified that is not explicitly excluded counts as non-human — including taxa
+outside the five reported domains, such as `other sequences` (28384, the parent
+of UniVec-Core) or `unclassified sequences` (12908). An LCA can only land on
+such a node if the database holds sequence under it.
+
+For [PrackenDB](database.md) it follows from the documented composition
+(bacteria, archaea, protists, fungi, human, RefSeq viral, UniVec-Core) that
+nothing sits under 28384 except UniVec-Core itself and nothing sits under
+12908, so every LCA that could fall outside the five domains instead lands on
+`cellular organisms` (131567), `root` (1), or `Eukaryota` (2759) — all on the
+human lineage, all excluded. On that reasoning the PrackenDB non-human fraction
+*is* the union of the five domains, with no unlabelled residual. It is an
+inference from the composition, not a measurement: to confirm it for a given
+database, check whether `nonhuman` exceeds the sum of the five domain columns on
+a real run. Do that before treating the two definitions as interchangeable on
+any other database (`nt`, custom builds, anything with siblings under 28384 or
+12908).
+
+**The database's taxonomy must contain the human node (taxid 9606).** Without
+it both `human_lineage` and `human_clade` resolve to empty sets, so *every*
+classified taxid — root included — passes the non-human test, and the
+human-homology guard below can never fire. The engine logs a warning when it
+loads such a taxonomy; non-human fractions from it are not comparable to
+fractions from a human-containing database.
+
 ## 3. Human-homology guard (HHG)
 
 Some non-human references share k-mers with the human genome (notably
@@ -67,8 +93,25 @@ nonhuman + univec_core + human_lineage + unclassified = 1.0
   ranks too broad to call (Root, Eukaryota, …).
 - **unclassified** — kraken2 returned no assignment.
 
+### Relationship between the domain columns and `nonhuman`
+
 The per-domain breakdowns (`bacterial`, `archaeal`, `fungal`, `protist`,
-`viral`) are sub-partitions of `nonhuman`.
+`viral`) are **not** a partition of `nonhuman`, and should not be read as one:
+
+- `bacterial`, `archaeal`, `fungal` and `viral` are subsets of `nonhuman`.
+- **`protist` is not.** It is computed as
+  `eukaryota − metazoa − fungi − viridiplantae`, and that set still contains
+  `Eukaryota` (2759) and `Opisthokonta` (33154) — both human ancestors, both
+  correctly excluded from `nonhuman`. A read whose LCA is Eukaryota (a routine
+  outcome when a database holds both fungi and protists) is therefore reported
+  as `protist > 0` while `nonhuman = 0`, and is simultaneously counted in
+  `human_lineage`. The `protist` column over-reports; it never causes
+  `nonhuman` to over- or under-report.
+- Whether the domains *sum* to `nonhuman` is a property of the database, not of
+  the method — see the note in §2. They do for PrackenDB.
+
+Only the four-way partition above is guaranteed. Use `nonhuman` for decisions
+and the domain columns for attribution.
 
 ## 6. Allele-based NHF
 
@@ -86,7 +129,34 @@ allele-based NHF therefore measures "how many ALT-supporting reads are non-human
 reads," which is the intended signal for contamination screening but should not
 be read as locus-level taxonomy.
 
-## 7. When taxonomy is unavailable
+## 7. Failure semantics: a broken screen must not look like a clean one
+
+A *failed run* fails towards **understating** non-human content — a false
+negative that reads as a clean sample — so failures raise rather than return a
+number. (Note that the two *degraded-database* modes go the other way: a
+missing `nodes.dmp` (§8) and a taxonomy without the human node (§2) both make
+the non-human fraction over-count. Those still return a usable tally, so they
+warn rather than raise.)
+
+**A failed kraken2 run raises.** `Kraken2Runner.classify_sequences` raises
+`Kraken2Error` when the subprocess exits non-zero, or when its per-read output
+does not account for every input read. The second case matters as much as the
+first: unaccounted reads still count towards the per-variant denominator but
+towards no numerator, so a truncated output silently deflates every fraction.
+Both would otherwise surface as `nonhuman_fraction = 0.0`.
+
+Pass `strict=False` to downgrade both to a warning plus
+`ClassificationResult.classification_failed = True`. If you do, you must check
+that flag — an unchecked flag is the failure mode this design exists to
+prevent.
+
+The CLI is always strict and exits **3** on failure, writing no summary file.
+
+**Zero support is not zero contamination.** `nonhuman_fraction == 0.0` with
+`supporting_reads == 0` (or `total == 0`) means *no evidence*, not *clean*.
+Always read the count alongside the fraction.
+
+## 8. When taxonomy is unavailable
 
 If `nodes.dmp` cannot be read, classification falls back to **exact-taxid
 matching only** (no lineage walk), and the results become unreliable in *both*
@@ -107,3 +177,21 @@ decisions on non-human content should treat `taxonomy_available is False` as
 taxonomy dumps otherwise silently corrupts the signal. Always verify your
 database includes `nodes.dmp` (and `names.dmp` for taxon names); see
 [database.md](database.md).
+
+### Where `taxonomy_available` is observable
+
+It lives on the engine `ClassificationResult`, so it is reachable from:
+
+- `Kraken2Runner.classify_sequences(...)` — returns the result directly.
+- `classify_reads_from_bam(...)` — returns the result directly.
+- `nonhuman-screen classify` **without** `--variants` — reported in
+  `summary.json`.
+
+It is **not** reachable from the allele-based helpers
+(`classify_variant_alt_reads`, `classify_variants_alt_reads`) or from
+`nonhuman-screen classify --variants`: those return / emit `VariantNHF`, which
+carries per-variant fractions only and no run-level status. If you need to gate
+on taxonomy availability per variant, call `classify_reads_from_bam` and check
+the flag on the result, or read it from a companion whole-BAM run on the same
+database. (Unlike a failed run — §7 — this one cannot raise, because a
+taxonomy-less database still produces a usable, if differently-scoped, tally.)
