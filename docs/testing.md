@@ -1,15 +1,17 @@
 # Testing
 
-`nonhuman-screen` has three layers of tests:
+`nonhuman-screen` has three layers of tests (unit, integration, functional):
 
 | Layer | Files | Needs | What it covers |
 |---|---|---|---|
-| **Unit** | `tests/test_engine.py`, `test_alleles.py`, `test_bam.py` | nothing (kraken2 is mocked) | classification logic, allele support, fraction math |
+| **Unit** | `tests/test_engine.py`, `test_alleles.py`, `test_cli.py` | nothing (kraken2 is mocked) | classification logic, allele support, fraction math, CLI exit codes |
+| **Unit (pysam)** | `tests/test_bam.py` | `pysam` (self-skips without it) | BAM read selection and per-variant reduction |
 | **Integration** | `tests/test_integration.py` | `kraken2` + `kraken2-build` | builds a tiny DB at runtime and checks `Kraken2Runner` classifies bacterial/human/unclassified reads |
 | **Functional (CLI controls)** | `tests/test_functional_cli.py` | `kraken2` binary only | runs the real `nonhuman-screen classify` **command** end-to-end on real BAMs, using committed fixtures |
 
-This document describes the **functional positive/negative controls**: their
-rationale, how the fixtures are created, and how the tests assert on them.
+This document describes the **functional positive / negative / failure
+controls**: their rationale, how the fixtures are created, how the tests assert
+on them, and (in §7) the limits of what they establish.
 
 ---
 
@@ -20,17 +22,23 @@ answer a different question: **does the shipped command-line tool actually detec
 non-human contamination on a real BAM, and stay quiet when there is none?**
 
 They do that with two matched controls that differ only by the presence of
-non-human reads:
+non-human reads, plus a failure control:
 
 - **Negative control** — the unmodified GIAB human BAMs. A correct tool must
   report **no** non-human content on clean human data (no false positives).
 - **Positive control** — the same child BAM with a known number of bacterial
   (*Streptococcus*) reads spliced in. A correct tool must **detect** them (no
   false negatives).
+- **Failure control** — the same BAM against a non-existent database. A correct
+  tool must **exit 3 and write no summary**, rather than reporting
+  `nonhuman_fraction = 0.0`; a failed screen that looks clean is the worst
+  failure direction for this method (see
+  [methodology.md §7](methodology.md)).
 
-Because the two inputs are identical except for the injected reads, a passing
-run proves the signal comes from the contamination, not from anything else in
-the pipeline.
+Because the two data inputs are identical except for the injected reads, a
+passing run shows the measured signal tracks the injected contamination rather
+than something else in the pipeline. What it does **not** establish is the
+per-read false-positive rate on human data — see §7.
 
 ---
 
@@ -54,8 +62,9 @@ tests/data/
 ```
 
 These files live only in the git repository — they are **excluded from the
-built sdist/wheel**, so they don't bloat the PyPI release (the package only
-ships `src/`).
+built sdist and wheel**, so they don't bloat the PyPI release. The wheel ships
+`src/` only; the sdist additionally carries the `tests/*.py` sources, but none
+of `tests/data/`.
 
 ---
 
@@ -201,11 +210,16 @@ then parse `<tmp>/out.summary.json`. Assertions:
   `bacterial > 0.02`, and `bacterial == nonhuman_fraction` (the injected reads
   are bacterial, nothing else).
 - **Separation:** the positive's `nonhuman_fraction` exceeds every negative's.
+- **Failure control:** a non-existent `--kraken2-db` exits **3** and leaves no
+  `summary.json` behind.
 
 **Why these thresholds are robust:** the negatives are *exactly* 0.0 (not merely
 small), because the DB shares no k-mers with human reads. Any positive margin
 therefore separates the classes cleanly, so `> 0.02` (against an observed
 ~0.078) and `>= 400` (against 500) leave a wide safety band and are not brittle.
+
+Note the flip side of that robustness: the negatives are exactly 0.0 *by
+construction*, which is why they cannot measure a false-positive rate. See §7.
 
 The whole module is `skipif`-gated on the `kraken2` binary and the committed DB
 being present, so it silently skips in environments without kraken2 (e.g. the
@@ -218,7 +232,8 @@ plain unit-test matrix) and runs for real where kraken2 is installed.
 The `integration` job in `.github/workflows/ci.yml`:
 
 1. installs **kraken2 2.17.1** from source (matching the DB's builder version),
-2. runs `tests/test_integration.py` (which builds its own DB), and
+2. runs `tests/test_integration.py` (which builds its own DB, using the same
+   single-threaded `kraken2-build` recipe as §3.3 so it also runs on macOS), and
 3. runs `tests/test_functional_cli.py` against the **committed** DB + BAMs.
 
 Because the fixtures are committed, the functional job needs only the classifier
@@ -228,6 +243,26 @@ binary, and the positive/negative controls run on every push.
 
 ## 7. Scope and caveats
 
+- **The mini DB contains no human sequence and no human taxonomy nodes.** This
+  is what makes the negative control exactly 0.0 — every human read is simply
+  *unclassified* — but it also bounds what the controls can prove. Three
+  consequences worth stating plainly:
+  - The **human-homology guard**, the **human-clade exclusion** and the
+    **ambiguous-ancestor** rule are never exercised end-to-end. They are
+    covered only by unit tests against hand-supplied taxid sets
+    (`tests/test_engine.py`), not against a real kraken2 run.
+  - The **per-read false-positive rate on human data is structurally zero**
+    here, so these controls cannot measure it. That rate is what actually
+    governs whether a real variant gets flagged as contamination: at the 0.05
+    NHF threshold used downstream, a single non-human-classified read is
+    decisive for any variant with ≤ 20 ALT-supporting fragments.
+  - Running against this DB triggers the engine's "no human node" warning
+    (see [methodology.md §2](methodology.md)) — expected here, and a signal you
+    should never see against a production database.
+
+  Adding a human reference (and a UniVec entry) to the mini DB would let the
+  negative control exercise the guard and report a real false-positive rate.
+  That is the highest-value addition to this suite.
 - **Synthetic, not a real genome.** The strep reference is a random sequence
   assigned the real taxid 1314. It proves the *pipeline* (kraken2 → taxonomy →
   non-human fraction) detects reads assigned to a bacterial taxon; it is not a

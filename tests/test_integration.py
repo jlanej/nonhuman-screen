@@ -165,22 +165,27 @@ def mini_kraken2_db(tmp_path_factory):
             fh.write(human_seq[i:i + 70] + "\n")
 
     # ── Build the database ────────────────────────────────────────
+    # Single-threaded, matching scripts/build_test_fixtures.py: kraken2-build's
+    # multi-threaded build_db pipeline (find | xargs cat | build_db) dies with
+    # SIGPIPE on macOS, and OMP_NUM_THREADS=1 keeps build_db from refusing the
+    # thread count. The DB is 4 kb, so threading buys nothing either way.
+    env = {**os.environ, "OMP_NUM_THREADS": "1"}
     for fa in (ecoli_fa, human_fa):
         subprocess.run(
             [
                 "kraken2-build", "--add-to-library", fa,
                 "--db", db, "--no-masking",
             ],
-            check=True, capture_output=True,
+            check=True, capture_output=True, env=env,
         )
 
     subprocess.run(
         [
             "kraken2-build", "--build", "--db", db,
-            "--threads", "2", "--no-masking",
+            "--threads", "1", "--no-masking",
             "--kmer-len", "35", "--minimizer-len", "31",
         ],
-        check=True, capture_output=True,
+        check=True, capture_output=True, env=env,
     )
 
     # Sanity: required database files must exist.

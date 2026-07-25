@@ -5,7 +5,10 @@ Subcommands
 ``classify`` — screen reads from a BAM/CRAM for non-human content.  With
 ``--variants`` it computes the allele-based non-human fraction for every ALT
 allele (the reads supporting each ALT are classified); otherwise it classifies
-all mapped reads and reports a single batch summary.
+every record in the file, one sequence per unique read name.
+
+The CLI always runs the engine in strict mode: a kraken2 failure exits 3 rather
+than writing a zero-filled ("clean-looking") result.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import sys
 
 from nonhuman_screen import __version__
 from nonhuman_screen.alleles import _is_symbolic
+from nonhuman_screen.engine import Kraken2Error
 
 
 def _build_parser():
@@ -176,9 +180,15 @@ def main(argv=None):
                 "(see docs/database.md) and try again.\n"
             )
             return 2
-        if args.variants:
-            return _classify_variants(args)
-        return _classify_all(args)
+        # A failed kraken2 run must not be written out as a clean (0.0)
+        # result, so fail with a distinct exit code instead of exit 0.
+        try:
+            if args.variants:
+                return _classify_variants(args)
+            return _classify_all(args)
+        except Kraken2Error as exc:
+            sys.stderr.write(f"error: kraken2 classification failed: {exc}\n")
+            return 3
 
     return 1  # pragma: no cover - argparse requires a subcommand
 

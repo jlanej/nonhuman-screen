@@ -13,6 +13,7 @@ from unittest import mock
 import pytest
 
 from nonhuman_screen.engine import (
+    Kraken2Error,
     Kraken2Runner,
     _ARCHAEA_TAXID,
     _BACTERIA_TAXID,
@@ -268,27 +269,42 @@ class TestKraken2RunnerClassify:
         assert "read2" in result.nonhuman_read_names
 
     @mock.patch("nonhuman_screen.engine.subprocess.Popen")
-    def test_classify_nonzero_exit(self, mock_popen):
-        """Non-zero exit code returns empty result with correct total."""
+    def test_classify_nonzero_exit_raises_by_default(self, mock_popen):
+        """A failed kraken2 run must never be reported as 0 % non-human."""
         mock_proc = mock.MagicMock()
         mock_proc.communicate.return_value = (b"", b"error msg")
         mock_proc.returncode = 1
         mock_popen.return_value = mock_proc
 
         kr = Kraken2Runner("/fake/db")
+        with pytest.raises(Kraken2Error, match="exited with code 1"):
+            kr.classify_sequences({"r1": "ACGT"})
+
+    @mock.patch("nonhuman_screen.engine.subprocess.Popen")
+    def test_classify_nonzero_exit_non_strict_flags_result(self, mock_popen):
+        """With strict=False the failure is flagged instead of raised."""
+        mock_proc = mock.MagicMock()
+        mock_proc.communicate.return_value = (b"", b"error msg")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        kr = Kraken2Runner("/fake/db", strict=False)
         result = kr.classify_sequences({"r1": "ACGT"})
         assert result.total == 1
         assert result.classified == 0
+        assert result.classification_failed is True
+        # The zero fraction is exactly why the flag has to exist.
+        assert result.nonhuman_fraction == 0.0
 
     @mock.patch("nonhuman_screen.engine.subprocess.Popen")
     def test_classify_nonzero_exit_logs_elapsed(self, mock_popen, caplog):
-        """Non-zero exit code warning should include elapsed time."""
+        """Non-zero exit warning should include exit code and elapsed time."""
         mock_proc = mock.MagicMock()
         mock_proc.communicate.return_value = (b"", b"kraken2 OOM")
         mock_proc.returncode = -9  # SIGKILL (OOM)
         mock_popen.return_value = mock_proc
 
-        kr = Kraken2Runner("/fake/db")
+        kr = Kraken2Runner("/fake/db", strict=False)
         caplog.set_level("WARNING", logger="nonhuman_screen.engine")
         result = kr.classify_sequences({"r1": "ACGT"})
         assert result.total == 1
@@ -296,6 +312,42 @@ class TestKraken2RunnerClassify:
         # Warning should include exit code and elapsed time
         assert "-9" in caplog.text
         assert "after" in caplog.text
+
+    @mock.patch("nonhuman_screen.engine.subprocess.Popen")
+    def test_classify_short_output_raises(self, mock_popen):
+        """Output that doesn't account for every read is a failure, not a tally.
+
+        Unaccounted reads land in the per-variant denominator with no
+        numerator, which understates the non-human fraction — the same silent
+        false-negative direction as an outright kraken2 failure.
+        """
+        mock_proc = mock.MagicMock()
+        mock_proc.communicate.return_value = (
+            b"C\tr1\t562\t100\t562:10\n", b"",  # only 1 of 2 reads
+        )
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        kr = Kraken2Runner("/fake/db")
+        with mock.patch.object(
+            Kraken2Runner, "_load_all_taxid_sets", return_value=None,
+        ):
+            with pytest.raises(Kraken2Error, match="accounted for 1 of 2"):
+                kr.classify_sequences({"r1": "ACGT", "r2": "ACGT"})
+
+    @mock.patch("nonhuman_screen.engine.subprocess.Popen")
+    def test_temp_fastq_cleaned_up_on_failure(self, mock_popen):
+        """The temporary FASTQ is removed even when the run raises."""
+        mock_proc = mock.MagicMock()
+        mock_proc.communicate.return_value = (b"", b"boom")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        kr = Kraken2Runner("/fake/db")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(Kraken2Error):
+                kr.classify_sequences({"r1": "ACGT"}, tmpdir=tmpdir)
+            assert [f for f in os.listdir(tmpdir) if f.endswith(".fq")] == []
 
     @mock.patch("nonhuman_screen.engine.subprocess.Popen")
     def test_classify_success_logs_completion(self, mock_popen, caplog):
@@ -334,7 +386,9 @@ class TestKraken2RunnerClassify:
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
 
-        kr = Kraken2Runner("/fake/db")
+        # strict=False: the unparseable rows are the point of this test, and
+        # they legitimately trip the read-accounting check (asserted below).
+        kr = Kraken2Runner("/fake/db", strict=False)
         with mock.patch.object(
             Kraken2Runner, '_load_all_taxid_sets', return_value=None,
         ):
@@ -346,6 +400,8 @@ class TestKraken2RunnerClassify:
         assert result.classified == 2
         assert result.bacterial_count == 1
         assert result.human_count == 1
+        # 2 of 3 reads accounted for -> the tally is short and says so.
+        assert result.classification_failed is True
 
     @mock.patch("nonhuman_screen.engine.subprocess.Popen")
     def test_classify_list_input(self, mock_popen):
@@ -371,7 +427,7 @@ class TestKraken2RunnerClassify:
     def test_temp_fastq_cleaned_up(self, mock_popen):
         """Temporary FASTQ file is cleaned up after classification."""
         mock_proc = mock.MagicMock()
-        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.communicate.return_value = (b"U\tr1\t0\t4\t0:1\n", b"")
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
 
@@ -398,7 +454,7 @@ class TestKraken2RunnerClassify:
             with open(fq_path) as fh:
                 captured_args["fastq_content"] = fh.read()
             proc = mock.MagicMock()
-            proc.communicate.return_value = (b"", b"")
+            proc.communicate.return_value = (b"U\tmyread\t0\t8\t0:1\n", b"")
             proc.returncode = 0
             return proc
 
@@ -419,7 +475,7 @@ class TestKraken2RunnerClassify:
     def test_command_includes_confidence(self, mock_popen):
         """Verify confidence flag is passed to kraken2."""
         mock_proc = mock.MagicMock()
-        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.communicate.return_value = (b"U\tr1\t0\t4\t0:1\n", b"")
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
 
@@ -443,7 +499,7 @@ class TestKraken2RunnerClassify:
     def test_command_includes_memory_mapping_when_enabled(self, mock_popen):
         """Verify memory-mapping flag is passed to kraken2 when enabled."""
         mock_proc = mock.MagicMock()
-        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.communicate.return_value = (b"U\tr1\t0\t4\t0:1\n", b"")
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
 
@@ -672,6 +728,38 @@ class TestLoadAllTaxidSets:
             # Human clade
             assert 9606 in sets["human_clade"]
             assert 33208 not in sets["human_clade"]
+
+    def test_warns_when_taxonomy_has_no_human_node(self, caplog):
+        """A DB without taxid 9606 disables both conservatism mechanisms.
+
+        With no human node the lineage/clade exclusions are empty, so the
+        "not on the human lineage" rule admits every classified taxid —
+        including root — and the human-homology guard can never fire.  That
+        must not happen silently.
+        """
+        with tempfile.TemporaryDirectory() as db:
+            with open(os.path.join(db, "nodes.dmp"), "w") as fh:
+                fh.write("1\t|\t1\t|\tno rank\t|\n")
+                fh.write("131567\t|\t1\t|\tno rank\t|\n")
+                fh.write("2\t|\t131567\t|\tsuperkingdom\t|\n")
+                fh.write("1314\t|\t2\t|\tspecies\t|\n")
+
+            caplog.set_level("WARNING", logger="nonhuman_screen.engine")
+            sets = Kraken2Runner._load_all_taxid_sets(db)
+
+        assert sets is not None
+        assert sets["human_lineage"] == set()
+        assert sets["human_clade"] == set()
+        assert "no human node" in caplog.text
+        assert "9606" in caplog.text
+
+    def test_no_warning_when_human_node_present(self, caplog):
+        """The warning must not fire for a database that does contain human."""
+        with tempfile.TemporaryDirectory() as db:
+            self._write_mini_taxonomy(db)
+            caplog.set_level("WARNING", logger="nonhuman_screen.engine")
+            Kraken2Runner._load_all_taxid_sets(db)
+        assert "no human node" not in caplog.text
 
 
 class TestKrakenKmerTaxidParsing:

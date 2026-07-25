@@ -43,6 +43,20 @@ _KRAKEN2_HEARTBEAT_INTERVAL = 30
 _KRAKEN2_HEARTBEAT_JOIN_TIMEOUT = 2
 
 
+class Kraken2Error(RuntimeError):
+    """Raised when a kraken2 run did not produce a trustworthy tally.
+
+    A failed classification must never be reported as "0 % non-human": for a
+    contamination screen that is a false negative dressed up as a clean
+    result.  :meth:`Kraken2Runner.classify_sequences` therefore raises this
+    by default when the ``kraken2`` subprocess exits non-zero, or when its
+    per-read output does not account for every input read.
+
+    Pass ``strict=False`` to :class:`Kraken2Runner` to downgrade both cases
+    to a warning plus ``ClassificationResult.classification_failed = True``.
+    """
+
+
 def _read_proc_rss_kb(pid):
     """Read RSS memory in kB for *pid* from ``/proc/{pid}/status``.
 
@@ -62,9 +76,9 @@ def _read_proc_rss_kb(pid):
 class Kraken2Runner:
     """Classify reads with kraken2 and tally non-human content.
 
-    Wraps the ``kraken2`` binary in a subprocess-based interface
-    analogous to :class:`JellyfishKmerQuery`.  Reads are written to a
-    temporary FASTQ, classified, and the kraken2 per-read output is
+    Wraps the ``kraken2`` binary in a subprocess-based interface.  Reads
+    are written to a temporary FASTQ, classified, and the kraken2 per-read
+    output is
     parsed to count how many reads are classified as bacterial
     (``taxid 2``), archaeal (``taxid 2157``), fungal (``taxid 4751``),
     protist (eukaryotic but not metazoan, fungal, or plant), viral
@@ -97,6 +111,20 @@ class Kraken2Runner:
     The ``--confidence`` threshold (default 0.0) controls how strict
     the LCA classification must be.  A value of 0.2 requires at least
     20 % of k-mers in the read to agree on the assigned clade.
+
+    **Failure handling**: by default (``strict=True``) a kraken2 run that
+    exits non-zero, or whose per-read output does not account for every
+    input read, raises :class:`Kraken2Error` rather than returning a
+    zero-filled result.  Reporting a failed run as "0 % non-human" would
+    be a false negative that reads as a clean sample, so it fails loudly
+    instead.  With ``strict=False`` both cases log a warning and set
+    ``Result.classification_failed``; callers must then check that flag.
+
+    **Database requirement**: the database's taxonomy must contain the
+    human node (taxid 9606) — every mainstream database does, including
+    PrackenDB.  Without it the human lineage/clade exclusions resolve to
+    empty sets and the human-homology guard can never fire, so a warning
+    is logged when the taxonomy is loaded (see :meth:`_load_all_taxid_sets`).
 
     Usage::
 
@@ -166,8 +194,17 @@ class Kraken2Runner:
                 ``domain`` (str), ``guard_status`` (str),
                 ``is_nonhuman`` (bool), and ``kmer_string`` (str).
                 Populated during :meth:`classify_sequences` for every
-                parsed read so the per-read audit trail can be written
-                to the companion BED file.
+                parsed read, so consumers can emit a per-read audit trail
+                (e.g. a BED track) of exactly why each read was or was not
+                counted as non-human.
+            classification_failed: True when the kraken2 run did not produce
+                a trustworthy tally (non-zero exit, or per-read output that
+                does not account for every input read) **and** the runner was
+                constructed with ``strict=False``.  With the default
+                ``strict=True`` those cases raise :class:`Kraken2Error`
+                instead, so this stays False.  A True here means the other
+                counts are meaningless — in particular
+                ``nonhuman_fraction == 0.0`` must **not** be read as "clean".
         """
 
         def __init__(self):
@@ -200,6 +237,9 @@ class Kraken2Runner:
             # gate on non-human content should treat a False here as "unknown"
             # rather than "clean".
             self.taxonomy_available = True
+            # True when the run itself failed and ``strict=False`` suppressed
+            # the Kraken2Error.  All other counts are then meaningless.
+            self.classification_failed = False
 
         def summary(self):
             """Return a human-readable summary string."""
@@ -245,11 +285,13 @@ class Kraken2Runner:
             """Return per-domain :class:`~nonhuman_screen.result.TaxonomicFractions`."""
             return TaxonomicFractions.from_result(self)
 
-    def __init__(self, db_path, *, confidence=0.0, threads=1, memory_mapping=False):
+    def __init__(self, db_path, *, confidence=0.0, threads=1,
+                 memory_mapping=False, strict=True):
         self.db_path = db_path
         self.confidence = confidence
         self.threads = threads
         self.memory_mapping = memory_mapping
+        self.strict = strict
 
     # ── database introspection ─────────────────────────────────────
 
@@ -489,11 +531,35 @@ class Kraken2Runner:
         ``human_clade`` contains human (9606) and any descendant
         subspecies or populations.
 
+        **The taxonomy must contain the human node (taxid 9606).**  When it
+        does not — a microbial-only or otherwise custom database — both
+        ``human_lineage`` and ``human_clade`` resolve to the empty set, and
+        the "not on the human lineage" rule then admits *every* classified
+        taxid, including root (1) and cellular organisms (131567).  The
+        human-homology guard is equally inoperative, since no k-mer can vote
+        for a taxon the database does not contain.  A warning is logged in
+        that case; the returned sets are still used, so callers get the
+        (over-counting) behaviour plus a loud diagnostic rather than a
+        silent change of meaning.
+
         Returns ``None`` when ``nodes.dmp`` is unavailable.
         """
         parent_map = Kraken2Runner._load_parent_map(db_path)
         if parent_map is None:
             return None
+
+        if _HUMAN_TAXID not in parent_map:
+            logger.warning(
+                "Kraken2 database taxonomy under %s contains no human node "
+                "(taxid %d). Both conservatism mechanisms are inoperative: "
+                "the human lineage/clade exclusions are empty, so every "
+                "classified read — including reads assigned to root — counts "
+                "as non-human, and the human-homology guard can never fire. "
+                "Non-human fractions from this database are NOT comparable "
+                "to those from a database containing the human genome "
+                "(e.g. PrackenDB).",
+                db_path, _HUMAN_TAXID,
+            )
 
         bacterial = Kraken2Runner._descendants_of(parent_map, _BACTERIA_TAXID)
         archaeal = Kraken2Runner._descendants_of(parent_map, _ARCHAEA_TAXID)
@@ -553,6 +619,13 @@ class Kraken2Runner:
 
         Returns:
             A :class:`Kraken2Runner.Result` with tallied counts.
+
+        Raises:
+            Kraken2Error: when ``strict`` is set (the default) and the
+                kraken2 subprocess exited non-zero, or its per-read output
+                did not account for every input read.  Either way the tally
+                would be silently short, and a short tally understates the
+                non-human fraction.
         """
         if isinstance(sequences, dict):
             items = sequences.items()
@@ -641,11 +714,20 @@ class Kraken2Runner:
 
             elapsed = time.monotonic() - kraken2_start
             if proc.returncode != 0:
-                logger.warning(
-                    "kraken2 exited with code %d after %.0f s: %s",
-                    proc.returncode, elapsed,
-                    stderr.decode(errors="replace").strip()[:500],
+                detail = stderr.decode(errors="replace").strip()[:500]
+                msg = (
+                    f"kraken2 exited with code {proc.returncode} after "
+                    f"{elapsed:.0f} s while classifying {result.total} reads "
+                    f"(db: {self.db_path}): {detail}"
                 )
+                if self.strict:
+                    raise Kraken2Error(msg)
+                logger.warning(
+                    "%s — returning a zero-filled result with "
+                    "classification_failed=True; do NOT read "
+                    "nonhuman_fraction=0.0 as 'clean'.", msg,
+                )
+                result.classification_failed = True
                 return result
 
             logger.info(
@@ -814,6 +896,26 @@ class Kraken2Runner:
                     "is_nonhuman": is_nonhuman,
                     "kmer_string": parts[4] if len(parts) >= 5 else "",
                 }
+
+            # Reconcile: kraken2 emits exactly one line per input read, so a
+            # short tally means output was lost (truncated stdout, unparseable
+            # rows).  Unaccounted reads land in the per-variant denominator
+            # with no numerator, which deflates the non-human fraction — the
+            # same silent false-negative direction as an outright failure.
+            parsed = result.classified + result.unclassified
+            if parsed != result.total:
+                msg = (
+                    f"kraken2 accounted for {parsed} of {result.total} input "
+                    f"reads (db: {self.db_path}); {result.total - parsed} "
+                    "read(s) produced no parseable per-read output, so every "
+                    "fraction derived from this run is understated"
+                )
+                if self.strict:
+                    raise Kraken2Error(msg)
+                logger.warning(
+                    "%s — setting classification_failed=True.", msg,
+                )
+                result.classification_failed = True
 
         finally:
             try:
