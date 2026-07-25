@@ -89,6 +89,7 @@ def classify_reads_from_bam(
     threads=1,
     memory_mapping=False,
     tmpdir=None,
+    strict=True,
 ):
     """Classify a set of reads from a BAM/CRAM and return a ``ClassificationResult``.
 
@@ -99,6 +100,14 @@ def classify_reads_from_bam(
             ``pos``) to restrict fetching to specific loci — far cheaper than a
             whole-file scan.  When both are given, *read_names* acts as an
             additional filter on the fetched reads.
+        strict: When True (default) a failed kraken2 run raises
+            :class:`~nonhuman_screen.engine.Kraken2Error` instead of returning
+            a zero-filled result.  See :class:`Kraken2Runner`.
+
+    Note:
+        An empty return (no requested read was found in the file) is *not* a
+        failure and does not raise: the result simply has ``total == 0``, which
+        callers must distinguish from "0 % non-human".
     """
     if not read_names and not loci:
         return Kraken2Runner.Result()
@@ -129,7 +138,7 @@ def classify_reads_from_bam(
 
     runner = Kraken2Runner(
         db_path, confidence=confidence, threads=threads,
-        memory_mapping=memory_mapping,
+        memory_mapping=memory_mapping, strict=strict,
     )
     return runner.classify_sequences(sequences, tmpdir=tmpdir)
 
@@ -145,6 +154,7 @@ def classify_variants_alt_reads(
     threads=1,
     memory_mapping=False,
     tmpdir=None,
+    strict=True,
 ):
     """Compute the allele-based non-human fraction for many variants at once.
 
@@ -157,9 +167,19 @@ def classify_variants_alt_reads(
         variants: Iterable of variants, each a ``(chrom, pos, ref, alt)`` tuple
             (0-based ``pos``), a mapping with those keys, or any object with
             ``chrom``/``pos``/``ref``/``alt`` attributes.
+        strict: When True (default) a failed kraken2 run raises
+            :class:`~nonhuman_screen.engine.Kraken2Error` rather than returning
+            ``VariantNHF`` objects whose fractions are all 0.0.
 
     Returns:
         A list of :class:`~nonhuman_screen.result.VariantNHF`, in input order.
+
+    Note:
+        ``VariantNHF`` carries no run-level status, so a caller that sets
+        ``strict=False`` cannot tell a failed run from a clean one through the
+        return value.  Use :func:`classify_reads_from_bam` (which returns the
+        engine result, including ``taxonomy_available`` and
+        ``classification_failed``) when you need to gate on run status.
     """
     normalized = [_as_variant(v) for v in variants]
 
@@ -174,7 +194,7 @@ def classify_variants_alt_reads(
 
     runner = Kraken2Runner(
         db_path, confidence=confidence, threads=threads,
-        memory_mapping=memory_mapping,
+        memory_mapping=memory_mapping, strict=strict,
     )
     result = runner.classify_sequences(sequences, tmpdir=tmpdir) if sequences \
         else Kraken2Runner.Result()
@@ -194,7 +214,7 @@ def classify_variants_alt_reads(
 def classify_variant_alt_reads(
     bam_path, db_path, chrom, pos, ref, alt, *,
     ref_fasta=None, min_baseq=0, confidence=0.0, threads=1,
-    memory_mapping=False, tmpdir=None,
+    memory_mapping=False, tmpdir=None, strict=True,
 ):
     """Allele-based non-human fraction for a single variant.
 
@@ -213,4 +233,5 @@ def classify_variant_alt_reads(
         bam_path, db_path, [(chrom, pos, ref, alt)],
         ref_fasta=ref_fasta, min_baseq=min_baseq, confidence=confidence,
         threads=threads, memory_mapping=memory_mapping, tmpdir=tmpdir,
+        strict=strict,
     )[0]

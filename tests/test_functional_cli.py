@@ -98,3 +98,26 @@ def test_positive_exceeds_negative(tmp_path):
     positive = _classify(POSITIVE_BAM, tmp_path)["nonhuman_fraction"]
     for bam in NEGATIVE_BAMS:
         assert positive > _classify(bam, tmp_path)["nonhuman_fraction"]
+
+
+def test_broken_database_fails_loudly(tmp_path):
+    """A failure control: a bad database must exit 3, not report 0 % non-human.
+
+    This is the third control alongside the positive/negative pair. Reporting
+    a failed screen as "clean" is a false negative that looks like a result,
+    so the CLI must refuse to emit a summary at all.
+    """
+    prefix = str(tmp_path / "out")
+    proc = subprocess.run(
+        _CLI_CMD + [
+            "classify",
+            "--bam", os.path.join(_BAM, NEGATIVE_BAMS[0]),
+            "--kraken2-db", str(tmp_path / "no_such_db"),
+            "--out-prefix", prefix,
+        ],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 3, f"expected exit 3, got {proc.returncode}"
+    assert not os.path.exists(prefix + ".summary.json"), (
+        "a failed run must not leave a summary behind"
+    )

@@ -12,10 +12,14 @@ Two levels of API:
 * BAM/allele helpers (needs the ``[bam]`` extra) — ``classify_variant_alt_reads``
   and ``classify_variants_alt_reads`` compute the non-human fraction of the
   reads supporting a variant's ALT allele.
+
+A failed kraken2 run raises ``Kraken2Error`` rather than reporting 0 % non-human,
+so a broken screen can never be mistaken for a clean sample.
 """
 
 from nonhuman_screen.engine import (
     ClassificationResult,
+    Kraken2Error,
     Kraken2Runner,
     _ARCHAEA_TAXID,
     _BACTERIA_TAXID,
@@ -35,6 +39,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "Kraken2Runner",
+    "Kraken2Error",
     "ClassificationResult",
     "TaxonomicFractions",
     "VariantNHF",
