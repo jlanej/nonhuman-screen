@@ -131,7 +131,7 @@ VCF and handles the conversion for you.
 | `TaxonomicFractions` | no | Per-domain fractions; `from_result` / `over_reads` |
 | `read_supports_alt(read, variant_pos, ref, alt)` | no | Does an aligned read carry the ALT allele? |
 | `parse_kmer_votes(kmer_string)` | no | Parse kraken2 per-read k-mer detail into taxid votes |
-| `VariantNHF` | no | Result of the allele-based helpers: `variant_key`, `nonhuman_fraction`, `supporting_reads`, `fractions`, `to_dict()` (pos 0-based) |
+| `VariantNHF` | no | Result of the allele-based helpers: `variant_key`, `nonhuman_fraction`, `supporting_reads`, `fractions`, `taxonomy_available`, `to_dict()` (pos 0-based) |
 | `classify_variant_alt_reads(...)` | yes | Allele-based NHF for one variant → `VariantNHF` |
 | `classify_variants_alt_reads(...)` | yes | Batched allele-based NHF for many variants |
 | `classify_reads_from_bam(...)` | yes | Classify reads by name and/or locus |

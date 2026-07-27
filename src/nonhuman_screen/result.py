@@ -111,6 +111,19 @@ class VariantNHF:
     alt: str
     supporting_read_names: frozenset
     fractions: TaxonomicFractions
+    # Run-level status copied from the engine result, so a per-variant consumer
+    # can tell a trustworthy fraction from one produced without lineage-aware
+    # taxonomy.  False means the database's nodes.dmp could not be read and the
+    # non-human fraction OVER-counts (see docs/methodology.md §8) — treat the
+    # number as unknown, not as clean and not as contaminated.
+    #
+    # The same value repeats on every variant of a batch: one kraken2
+    # invocation loads the taxonomy once.  It describes the classification run,
+    # so it is only meaningful when a run happened — a batch in which no
+    # variant had any ALT-supporting read never invokes kraken2 and carries the
+    # default True alongside ``supporting_reads == 0``, which is the field that
+    # tells you nothing was classified.
+    taxonomy_available: bool = True
 
     @property
     def variant_key(self) -> str:
@@ -134,5 +147,6 @@ class VariantNHF:
             "alt": self.alt,
             "supporting_reads": self.supporting_reads,
             "nonhuman_fraction": self.nonhuman_fraction,
+            "taxonomy_available": self.taxonomy_available,
             "fractions": self.fractions.to_dict(),
         }

@@ -10,6 +10,16 @@ Continuous builds published from `main` carry the version `0.1.<run-number>`
 
 ## Unreleased
 
+### Added
+- `VariantNHF.taxonomy_available`, propagated from the engine result, plus a
+  `taxonomy_available` column (appended last, so no existing column moves) on
+  `classify --variants` output and a field per entry in its `summary.json`.
+  A database whose `nodes.dmp` cannot be read still produces a plausible tally,
+  but one that **over**-counts non-human content — so a consumer that
+  down-ranks variants above an NHF threshold would reject real calls with no
+  indication why. `--variants` was previously the only surface that could not
+  observe this.
+
 ### Changed
 - **Breaking:** a kraken2 run that exits non-zero, or whose per-read output does
   not account for every input read, now raises `Kraken2Error` instead of

@@ -180,18 +180,26 @@ database includes `nodes.dmp` (and `names.dmp` for taxon names); see
 
 ### Where `taxonomy_available` is observable
 
-It lives on the engine `ClassificationResult`, so it is reachable from:
+Everywhere. It originates on the engine `ClassificationResult` and is copied
+onto each `VariantNHF`, so it is reachable from:
 
-- `Kraken2Runner.classify_sequences(...)` — returns the result directly.
-- `classify_reads_from_bam(...)` — returns the result directly.
-- `nonhuman-screen classify` **without** `--variants` — reported in
-  `summary.json`.
+- `Kraken2Runner.classify_sequences(...)` and `classify_reads_from_bam(...)` —
+  on the returned result.
+- `classify_variant_alt_reads(...)` / `classify_variants_alt_reads(...)` — as
+  `VariantNHF.taxonomy_available`.
+- `nonhuman-screen classify` — in `summary.json` in whole-BAM mode, and with
+  `--variants` as the last column of `<prefix>.variant_nhf.tsv` plus a field
+  per entry in `<prefix>.summary.json`.
 
-It is **not** reachable from the allele-based helpers
-(`classify_variant_alt_reads`, `classify_variants_alt_reads`) or from
-`nonhuman-screen classify --variants`: those return / emit `VariantNHF`, which
-carries per-variant fractions only and no run-level status. If you need to gate
-on taxonomy availability per variant, call `classify_reads_from_bam` and check
-the flag on the result, or read it from a companion whole-BAM run on the same
-database. (Unlike a failed run — §7 — this one cannot raise, because a
-taxonomy-less database still produces a usable, if differently-scoped, tally.)
+**Why it is worth gating on.** Unlike a failed run (§7), a taxonomy-less
+database still produces a plausible-looking tally, so it cannot raise — but
+that tally *over*-counts non-human content. A pipeline that down-ranks variants
+above some NHF threshold will therefore reject real calls, with nothing in the
+numbers to indicate why. Checking this column is what turns that into a
+detectable condition.
+
+One kraken2 invocation loads the taxonomy once, so the value is the same on
+every variant of a batch. It describes the classification run, which means it
+is only meaningful once a run happened: a batch in which no variant had any
+ALT-supporting read never invokes kraken2 and reports the default `True`
+alongside `supporting_reads == 0`. Read it together with the read count.
