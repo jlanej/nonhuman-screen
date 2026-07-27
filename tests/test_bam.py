@@ -102,6 +102,50 @@ class TestClassifyVariantAltReads:
         assert m.call_count == 0  # empty union -> engine not invoked
 
 
+class TestTaxonomyAvailablePropagation:
+    """`taxonomy_available` must reach per-variant results.
+
+    Without it a `--variants` consumer cannot tell a trustworthy fraction from
+    one produced by a database with no readable nodes.dmp — which OVER-counts
+    non-human content (methodology §8), i.e. it can push a real variant over a
+    contamination threshold with no signal that anything was wrong.
+    """
+
+    def _classify_with(self, taxonomy_available):
+        def _fake(self, sequences, tmpdir=None):
+            r = _fake_classify(self, sequences, tmpdir)
+            r.taxonomy_available = taxonomy_available
+            return r
+        return _fake
+
+    @pytest.mark.parametrize("available", [True, False])
+    def test_flag_reaches_every_variant(self, snp_bam, available):
+        with mock.patch.object(
+            Kraken2Runner, "classify_sequences",
+            autospec=True, side_effect=self._classify_with(available),
+        ):
+            results = classify_variants_alt_reads(
+                snp_bam, "db", [("chr1", 105, "A", "T"), ("chr1", 105, "A", "T")],
+            )
+        assert [v.taxonomy_available for v in results] == [available, available]
+        assert all(v.to_dict()["taxonomy_available"] is available for v in results)
+
+    def test_defaults_true_when_no_reads_were_classified(self, snp_bam):
+        """No ALT support -> kraken2 never runs, so there is no run to report on.
+
+        The companion signal is `supporting_reads == 0`; the flag is only
+        meaningful once something was actually classified.
+        """
+        with mock.patch.object(
+            Kraken2Runner, "classify_sequences",
+            autospec=True, side_effect=_fake_classify,
+        ) as m:
+            v = classify_variant_alt_reads(snp_bam, "db", "chr1", 105, "A", "G")
+        assert m.call_count == 0
+        assert v.supporting_reads == 0
+        assert v.taxonomy_available is True
+
+
 class TestBatching:
     def test_single_kraken2_call_across_variants(self, snp_bam):
         variants = [

@@ -175,11 +175,13 @@ def classify_variants_alt_reads(
         A list of :class:`~nonhuman_screen.result.VariantNHF`, in input order.
 
     Note:
-        ``VariantNHF`` carries no run-level status, so a caller that sets
-        ``strict=False`` cannot tell a failed run from a clean one through the
-        return value.  Use :func:`classify_reads_from_bam` (which returns the
-        engine result, including ``taxonomy_available`` and
-        ``classification_failed``) when you need to gate on run status.
+        ``VariantNHF`` carries ``taxonomy_available`` but **not**
+        ``classification_failed``, so a caller that sets ``strict=False``
+        cannot tell a failed run from a clean one through the return value —
+        under the default ``strict=True`` a failed run raises instead, which is
+        why that is the default.  Use :func:`classify_reads_from_bam`, which
+        returns the engine result carrying both flags, if you need to gate on
+        run status while suppressing the exception.
     """
     normalized = [_as_variant(v) for v in variants]
 
@@ -206,6 +208,7 @@ def classify_variants_alt_reads(
                 chrom=chrom, pos=pos, ref=ref, alt=alt,
                 supporting_read_names=frozenset(names),
                 fractions=TaxonomicFractions.over_reads(result, names),
+                taxonomy_available=result.taxonomy_available,
             )
         )
     return out

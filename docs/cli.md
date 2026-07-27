@@ -36,13 +36,22 @@ nonhuman-screen classify \
 Produces `sample_contam.variant_nhf.tsv`:
 
 ```
-variant_key       supporting_reads  nonhuman_fraction  bacterial  archaeal  ...
-chr1:12344:A:T    18                0.0                0.0        0.0       ...
-chr8:40119:G:GAC  12                0.83               0.83       0.0       ...
+variant_key       supporting_reads  nonhuman_fraction  bacterial  ...  taxonomy_available
+chr1:12344:A:T    18                0.0                0.0        ...  True
+chr8:40119:G:GAC  12                0.83               0.83       ...  True
 ```
 
 and `sample_contam.summary.json` (the full per-variant breakdown including
 per-domain fractions and supporting-read counts).
+
+**`taxonomy_available`** is the run-level status, repeated on every row so it
+survives a per-variant join. `False` means the database's `nodes.dmp` could not
+be read, in which case the non-human fraction **over**-counts (see
+[methodology.md §8](methodology.md)) — treat those fractions as unknown rather
+than acting on them. A pipeline that down-ranks variants above an NHF threshold
+should skip or blank a table whose `taxonomy_available` is `False`, since
+otherwise the inflated fractions silently reject real calls. It is the last
+column, so adding it moved no existing one.
 
 Whole-BAM summary:
 

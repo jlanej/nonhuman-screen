@@ -90,10 +90,12 @@ def _read_vcf_variants(path):
                 yield (rec.chrom, rec.start, rec.ref, alt)
 
 
+# taxonomy_available is appended last so that adding it cannot shift any
+# existing column for a positional reader.
 _TSV_COLUMNS = (
     "variant_key", "supporting_reads", "nonhuman_fraction",
     "bacterial", "archaeal", "fungal", "protist", "viral", "univec_core",
-    "human_lineage", "unclassified",
+    "human_lineage", "unclassified", "taxonomy_available",
 )
 
 
@@ -116,6 +118,7 @@ def _classify_variants(args):
             v.variant_key, v.supporting_reads, v.nonhuman_fraction,
             f.bacterial, f.archaeal, f.fungal, f.protist, f.viral,
             f.univec_core, f.human_lineage, f.unclassified,
+            v.taxonomy_available,
         )))
     tsv = "\n".join(lines) + "\n"
 
